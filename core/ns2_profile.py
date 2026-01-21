@@ -1,12 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 # =============================
 # NS2 SYSTEM PROFILE
 # =============================
-# This file defines an NS2-shaped hardware model.
-# It does NOT emulate firmware or proprietary behavior.
-# It exists to give AxionIR a realistic console profile.
+# NS2-shaped hardware model.
+# Firmware-free, legally clean.
 # =============================
 
 
@@ -24,7 +23,7 @@ class NS2GPUProfile:
     queues: int = 2                # graphics + async compute
     unified_memory: bool = True
     max_in_flight_cmds: int = 64
-    tile_based: bool = True        # very important assumption
+    tile_based: bool = True        # important console assumption
 
 
 @dataclass
@@ -37,9 +36,9 @@ class NS2MemoryProfile:
 
 @dataclass
 class NS2Profile:
-    cpu: NS2CPUProfile = NS2CPUProfile()
-    gpu: NS2GPUProfile = NS2GPUProfile()
-    memory: NS2MemoryProfile = NS2MemoryProfile()
+    cpu: NS2CPUProfile = field(default_factory=NS2CPUProfile)
+    gpu: NS2GPUProfile = field(default_factory=NS2GPUProfile)
+    memory: NS2MemoryProfile = field(default_factory=NS2MemoryProfile)
 
     def describe(self) -> str:
         return (

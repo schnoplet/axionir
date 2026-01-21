@@ -2,8 +2,8 @@ from .cpu import CPUState, ShadowMMU, IRInterpreter
 from .optimizer import IROptimizer
 from .cache import HotBlockProfiler, TraceCache
 from .scheduler import Scheduler
-from .gpu_ir import GPUCommandBuffer
 from .ns2_profile import NS2Profile
+from .ns2_gpu import NS2GPU
 
 
 class Dispatcher:
@@ -50,13 +50,13 @@ class Dispatcher:
 class AxionIRSystem:
     """
     AxionIR bound to an NS2-shaped system profile.
-    This is a 3rd-class emulator: hardware-shaped, firmware-free.
+    3rd-class NS2 emulator: hardware-shaped, firmware-free.
     """
 
     def __init__(self, profile: NS2Profile | None = None):
         self.profile = profile or NS2Profile()
 
-        # CPU + memory shaped by NS2 profile
+        # CPU + memory
         self.cpu_state = CPUState(
             reg_count=self.profile.cpu.registers
         )
@@ -80,11 +80,17 @@ class AxionIRSystem:
         )
 
         self.scheduler = Scheduler()
-        self.gpu = GPUCommandBuffer()
 
-        # Debug / introspection hook
+        # NS2-shaped GPU
+        self.gpu = NS2GPU(
+            max_in_flight=self.profile.gpu.max_in_flight_cmds
+        )
+
         print("[AxionIR] Booted", self.profile.describe())
 
     def run_block(self, block):
         self.dispatcher.run(block)
         self.scheduler.tick_cpu(len(block))
+
+        # Advance GPU asynchronously
+        self.gpu.tick()
