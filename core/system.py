@@ -5,6 +5,7 @@ from .scheduler import Scheduler
 from .ns2_profile import NS2Profile, NS2Mode
 from .ns2_gpu import NS2GPU, GPUFence
 from .ns2_display import NS2Display, VSyncFence
+from .elf_loader import ELF64Loader
 
 
 class Dispatcher:
@@ -48,13 +49,12 @@ class Dispatcher:
 class AxionIRSystem:
     """
     REAL NS2 emulator core.
-    Unified memory, real contention, real stalls.
+    Capable of loading real ARM64 ELF binaries.
     """
 
     def __init__(self, profile: NS2Profile | None = None):
         self.profile = profile or NS2Profile()
 
-        # Memory bandwidth: GB/s → bytes per tick (conservative)
         bandwidth_bytes = int(
             (self.profile.memory.bandwidth_gbps * 1e9) / 60
         )
@@ -93,7 +93,18 @@ class AxionIRSystem:
             refresh_hz=self.profile.refresh_hz()
         )
 
+        self.elf = ELF64Loader(self.mmu)
+
         print("[AxionIR] Booted", self.profile.describe())
+
+    # -------------------------
+    # ELF loading (REAL SOFTWARE)
+    # -------------------------
+
+    def load_elf(self, path: str):
+        entry = self.elf.load(path)
+        self.cpu_state.pc = entry
+        print(f"[AxionIR] ELF loaded, entry @ 0x{entry:x}")
 
     # -------------------------
     # GPU / Display
