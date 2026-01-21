@@ -5,7 +5,7 @@ from .ir import IRInstr, IROp, IRBlock
 class ARM64CPU:
     """
     ARM64 instruction fetch + decode + IR translation.
-    This is REAL execution infrastructure.
+    Now includes REAL control flow.
     """
 
     def __init__(self, cpu_state, mmu):
@@ -32,7 +32,6 @@ class ARM64CPU:
         # ----------------------------------
         # MOVZ (Move Wide Immediate)
         # ----------------------------------
-        # opcode[31:23] == 0b110100101
         if (opcode >> 23) & 0x1FF == 0b110100101:
             rd = opcode & 0x1F
             imm16 = (opcode >> 5) & 0xFFFF
@@ -49,7 +48,6 @@ class ARM64CPU:
         # ----------------------------------
         # ADD (register)
         # ----------------------------------
-        # opcode[31:21] == 0b10001011000
         if (opcode >> 21) & 0x7FF == 0b10001011000:
             rd = opcode & 0x1F
             rn = (opcode >> 5) & 0x1F
@@ -60,6 +58,34 @@ class ARM64CPU:
                 dst=rd,
                 src1=rn,
                 src2=rm
+            ))
+            return block
+
+        # ----------------------------------
+        # B (unconditional branch)
+        # ----------------------------------
+        # opcode[31:26] == 0b000101
+        if (opcode >> 26) & 0x3F == 0b000101:
+            imm26 = opcode & 0x03FFFFFF
+            if imm26 & (1 << 25):
+                imm26 |= ~0x03FFFFFF  # sign extend
+            offset = imm26 << 2
+            target = self.s.pc + offset
+
+            block.emit(IRInstr(
+                op=IROp.JMP,
+                imm=target
+            ))
+            return block
+
+        # ----------------------------------
+        # RET
+        # ----------------------------------
+        # opcode == 11010110010111110000001111100000
+        if opcode == 0xD65F03C0:
+            block.emit(IRInstr(
+                op=IROp.JMP,
+                imm=self.s.regs[30]  # X30 = LR
             ))
             return block
 
