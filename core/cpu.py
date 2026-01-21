@@ -1,18 +1,18 @@
 from .ir import IROp, IRInstr, IRBlock
 import copy
+import sys
 
 
 class CPUState:
     def __init__(self, reg_count: int = 32):
         self.regs = [0] * reg_count
         self.pc = 0
-        self.sp = 0x800000  # initial stack pointer
+        self.sp = 0x800000
         self.flags = {"Z": False}
+        self.running = True
 
     def read_reg(self, idx: int) -> int:
-        if idx == 31:
-            return self.sp
-        return self.regs[idx]
+        return self.sp if idx == 31 else self.regs[idx]
 
     def write_reg(self, idx: int, value: int):
         if idx == 31:
@@ -20,57 +20,22 @@ class CPUState:
         else:
             self.regs[idx] = value
 
-    def snapshot(self):
-        return copy.deepcopy(self)
-
-    def restore(self, snap):
-        self.regs = snap.regs
-        self.pc = snap.pc
-        self.sp = snap.sp
-        self.flags = snap.flags
-
 
 class ShadowMMU:
     def __init__(self, size: int, bandwidth_bytes_per_tick: int):
         self.mem = bytearray(size)
-        self.bandwidth_limit = bandwidth_bytes_per_tick
-        self.bandwidth_used = 0
-        self.history = []
+        self.next_free = 0x10000000  # start of user mappings
 
-    def reset_bandwidth(self):
-        self.bandwidth_used = 0
-
-    def consume_bandwidth(self, bytes_used: int) -> bool:
-        self.bandwidth_used += bytes_used
-        return self.bandwidth_used <= self.bandwidth_limit
-
-    def begin_epoch(self):
-        self.history.append([])
-
-    def rollback_epoch(self):
-        if not self.history:
-            return
-        diffs = self.history.pop()
-        for addr, old in reversed(diffs):
-            self.mem[addr] = old
-
-    def commit_epoch(self):
-        if self.history:
-            self.history.pop()
+    def mmap(self, length: int) -> int:
+        addr = self.next_free
+        length = (length + 0xFFF) & ~0xFFF  # page align
+        self.next_free += length
+        return addr
 
     def read64(self, addr: int) -> int:
-        if not self.consume_bandwidth(8):
-            raise RuntimeError("Memory bandwidth exceeded")
         return int.from_bytes(self.mem[addr:addr + 8], "little")
 
     def write64(self, addr: int, value: int):
-        if not self.consume_bandwidth(8):
-            raise RuntimeError("Memory bandwidth exceeded")
-
-        if self.history:
-            for i in range(8):
-                self.history[-1].append((addr + i, self.mem[addr + i]))
-
         self.mem[addr:addr + 8] = value.to_bytes(8, "little")
 
 
@@ -86,41 +51,77 @@ class IRInterpreter:
         return True
 
     def exec(self, ins: IRInstr) -> bool:
-        try:
-            if ins.op == IROp.NOP:
-                return True
-
-            if ins.op == IROp.MOV:
-                self.s.write_reg(
-                    ins.dst,
-                    ins.imm if ins.imm is not None else self.s.read_reg(ins.src1)
-                )
-                return True
-
-            if ins.op == IROp.ADD:
-                self.s.write_reg(
-                    ins.dst,
-                    self.s.read_reg(ins.src1) + self.s.read_reg(ins.src2)
-                )
-                return True
-
-            if ins.op == IROp.LOAD:
-                val = self.m.read64(self.s.read_reg(ins.src1))
-                self.s.write_reg(ins.dst, val)
-                return True
-
-            if ins.op == IROp.STORE:
-                self.m.write64(
-                    self.s.read_reg(ins.dst),
-                    self.s.read_reg(ins.src1)
-                )
-                return True
-
-            if ins.op == IROp.JMP:
-                self.s.pc = ins.imm
-                return True
-
-        except RuntimeError:
+        if not self.s.running:
             return False
 
+        if ins.op == IROp.NOP:
+            return True
+
+        if ins.op == IROp.MOV:
+            self.s.write_reg(
+                ins.dst,
+                ins.imm if ins.imm is not None else self.s.read_reg(ins.src1)
+            )
+            return True
+
+        if ins.op == IROp.ADD:
+            self.s.write_reg(
+                ins.dst,
+                self.s.read_reg(ins.src1) + self.s.read_reg(ins.src2)
+            )
+            return True
+
+        if ins.op == IROp.LOAD:
+            self.s.write_reg(ins.dst, self.m.read64(self.s.read_reg(ins.src1)))
+            return True
+
+        if ins.op == IROp.STORE:
+            self.m.write64(
+                self.s.read_reg(ins.dst),
+                self.s.read_reg(ins.src1)
+            )
+            return True
+
+        if ins.op == IROp.JMP:
+            self.s.pc = ins.imm
+            return True
+
+        if ins.op == IROp.SVC:
+            return self.handle_syscall()
+
+        return False
+
+    def handle_syscall(self) -> bool:
+        nr = self.s.read_reg(8)
+
+        # exit
+        if nr == 93:
+            code = self.s.read_reg(0)
+            print(f"[AxionIR] Program exited with code {code}")
+            self.s.running = False
+            return False
+
+        # write(fd, buf, len)
+        if nr == 64:
+            fd = self.s.read_reg(0)
+            buf = self.s.read_reg(1)
+            length = self.s.read_reg(2)
+            data = bytes(self.m.mem[buf:buf + length])
+
+            if fd == 1:
+                sys.stdout.buffer.write(data)
+                sys.stdout.flush()
+
+            self.s.write_reg(0, length)
+            return True
+
+        # mmap(addr, length, prot, flags, fd, offset)
+        if nr == 222:
+            length = self.s.read_reg(1)
+            addr = self.m.mmap(length)
+            self.s.write_reg(0, addr)
+            return True
+
+        print(f"[AxionIR] Unhandled syscall {nr}")
+        self.s.running = False
         return False

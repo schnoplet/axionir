@@ -1,7 +1,12 @@
-from enum import Enum, auto
+# AxionIR IR definitions
+# Apache-2.0
+
+from __future__ import annotations
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import Optional, List
 import hashlib
+
 
 class IROp(Enum):
     NOP = auto()
@@ -13,7 +18,8 @@ class IROp(Enum):
     STORE = auto()
     CMP = auto()
     JMP = auto()
-    BRANCH = auto()
+    SVC = auto()   # <-- THIS WAS MISSING
+
 
 @dataclass(frozen=True)
 class IRInstr:
@@ -22,6 +28,7 @@ class IRInstr:
     src1: Optional[int] = None
     src2: Optional[int] = None
     imm: Optional[int] = None
+
 
 class IRBlock:
     def __init__(self, label: str = ""):
@@ -37,7 +44,5 @@ class IRBlock:
     def hash(self) -> str:
         h = hashlib.sha256()
         for i in self.instructions:
-            h.update(
-                f"{i.op.name}:{i.dst}:{i.src1}:{i.src2}:{i.imm}".encode()
-            )
+            h.update(f"{i.op.name}:{i.dst}:{i.src1}:{i.src2}:{i.imm}".encode())
         return h.hexdigest()

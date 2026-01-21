@@ -24,23 +24,22 @@ class ARM64CPU:
             block.emit(IRInstr(IROp.MOV, dst=rd, imm=imm16 << shift))
             return block
 
-        # ADD immediate (for stack)
-        if (opcode >> 24) & 0x1F == 0b10001:
+        # ADD (register)
+        if (opcode >> 21) & 0x7FF == 0b10001011000:
             rd = opcode & 0x1F
             rn = (opcode >> 5) & 0x1F
-            imm12 = (opcode >> 10) & 0xFFF
-            block.emit(IRInstr(IROp.MOV, dst=rd, src1=rn))
-            block.emit(IRInstr(IROp.ADD, dst=rd, src1=rd, src2=rd))
+            rm = (opcode >> 16) & 0x1F
+            block.emit(IRInstr(IROp.ADD, dst=rd, src1=rn, src2=rm))
             return block
 
-        # LDR Xt, [Xn]
+        # LDR
         if (opcode >> 22) & 0x3FF == 0b11111000010:
             rt = opcode & 0x1F
             rn = (opcode >> 5) & 0x1F
             block.emit(IRInstr(IROp.LOAD, dst=rt, src1=rn))
             return block
 
-        # STR Xt, [Xn]
+        # STR
         if (opcode >> 22) & 0x3FF == 0b11111000000:
             rt = opcode & 0x1F
             rn = (opcode >> 5) & 0x1F
@@ -58,6 +57,11 @@ class ARM64CPU:
         # RET
         if opcode == 0xD65F03C0:
             block.emit(IRInstr(IROp.JMP, imm=self.s.read_reg(30)))
+            return block
+
+        # SVC
+        if (opcode >> 21) & 0x7FF == 0b11010100000:
+            block.emit(IRInstr(IROp.SVC))
             return block
 
         block.emit(IRInstr(IROp.NOP))
