@@ -1,5 +1,3 @@
-# pyright: reportGeneralTypeIssues=false
-# type: ignore
 from .ir import IROp, IRInstr, IRBlock
 import copy
 
@@ -8,7 +6,19 @@ class CPUState:
     def __init__(self, reg_count: int = 32):
         self.regs = [0] * reg_count
         self.pc = 0
+        self.sp = 0x800000  # initial stack pointer
         self.flags = {"Z": False}
+
+    def read_reg(self, idx: int) -> int:
+        if idx == 31:
+            return self.sp
+        return self.regs[idx]
+
+    def write_reg(self, idx: int, value: int):
+        if idx == 31:
+            self.sp = value
+        else:
+            self.regs[idx] = value
 
     def snapshot(self):
         return copy.deepcopy(self)
@@ -16,14 +26,11 @@ class CPUState:
     def restore(self, snap):
         self.regs = snap.regs
         self.pc = snap.pc
+        self.sp = snap.sp
         self.flags = snap.flags
 
 
 class ShadowMMU:
-    """
-    Unified memory with bandwidth tracking + rollback.
-    """
-
     def __init__(self, size: int, bandwidth_bytes_per_tick: int):
         self.mem = bytearray(size)
         self.bandwidth_limit = bandwidth_bytes_per_tick
@@ -79,38 +86,34 @@ class IRInterpreter:
         return True
 
     def exec(self, ins: IRInstr) -> bool:
-        r = self.s.regs
-
         try:
             if ins.op == IROp.NOP:
                 return True
 
             if ins.op == IROp.MOV:
-                r[ins.dst] = ins.imm if ins.imm is not None else r[ins.src1]
+                self.s.write_reg(
+                    ins.dst,
+                    ins.imm if ins.imm is not None else self.s.read_reg(ins.src1)
+                )
                 return True
 
             if ins.op == IROp.ADD:
-                r[ins.dst] = r[ins.src1] + r[ins.src2]
-                return True
-
-            if ins.op == IROp.SUB:
-                r[ins.dst] = r[ins.src1] - r[ins.src2]
-                return True
-
-            if ins.op == IROp.MUL:
-                r[ins.dst] = r[ins.src1] * r[ins.src2]
+                self.s.write_reg(
+                    ins.dst,
+                    self.s.read_reg(ins.src1) + self.s.read_reg(ins.src2)
+                )
                 return True
 
             if ins.op == IROp.LOAD:
-                r[ins.dst] = self.m.read64(r[ins.src1])
+                val = self.m.read64(self.s.read_reg(ins.src1))
+                self.s.write_reg(ins.dst, val)
                 return True
 
             if ins.op == IROp.STORE:
-                self.m.write64(r[ins.dst], r[ins.src1])
-                return True
-
-            if ins.op == IROp.CMP:
-                self.s.flags["Z"] = (r[ins.src1] == r[ins.src2])
+                self.m.write64(
+                    self.s.read_reg(ins.dst),
+                    self.s.read_reg(ins.src1)
+                )
                 return True
 
             if ins.op == IROp.JMP:

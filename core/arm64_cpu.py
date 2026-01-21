@@ -3,18 +3,9 @@ from .ir import IRInstr, IROp, IRBlock
 
 
 class ARM64CPU:
-    """
-    ARM64 instruction fetch + decode + IR translation.
-    Includes real control flow.
-    """
-
     def __init__(self, cpu_state, mmu):
         self.s = cpu_state
         self.m = mmu
-
-    # =========================
-    # FETCH
-    # =========================
 
     def fetch(self) -> int:
         pc = self.s.pc
@@ -22,73 +13,52 @@ class ARM64CPU:
         self.s.pc += 4
         return instr
 
-    # =========================
-    # DECODE → IR
-    # =========================
-
     def decode_to_ir(self, opcode: int) -> IRBlock:
         block = IRBlock(label=f"pc_{self.s.pc:x}")
 
-        # ----------------------------------
-        # MOVZ (Move Wide Immediate)
-        # ----------------------------------
+        # MOVZ
         if (opcode >> 23) & 0x1FF == 0b110100101:
             rd = opcode & 0x1F
             imm16 = (opcode >> 5) & 0xFFFF
             shift = ((opcode >> 21) & 0x3) * 16
-            value = imm16 << shift
-
-            block.emit(IRInstr(
-                op=IROp.MOV,
-                dst=rd,
-                imm=value
-            ))
+            block.emit(IRInstr(IROp.MOV, dst=rd, imm=imm16 << shift))
             return block
 
-        # ----------------------------------
-        # ADD (register)
-        # ----------------------------------
-        if (opcode >> 21) & 0x7FF == 0b10001011000:
+        # ADD immediate (for stack)
+        if (opcode >> 24) & 0x1F == 0b10001:
             rd = opcode & 0x1F
             rn = (opcode >> 5) & 0x1F
-            rm = (opcode >> 16) & 0x1F
-
-            block.emit(IRInstr(
-                op=IROp.ADD,
-                dst=rd,
-                src1=rn,
-                src2=rm
-            ))
+            imm12 = (opcode >> 10) & 0xFFF
+            block.emit(IRInstr(IROp.MOV, dst=rd, src1=rn))
+            block.emit(IRInstr(IROp.ADD, dst=rd, src1=rd, src2=rd))
             return block
 
-        # ----------------------------------
-        # B (unconditional branch)
-        # ----------------------------------
+        # LDR Xt, [Xn]
+        if (opcode >> 22) & 0x3FF == 0b11111000010:
+            rt = opcode & 0x1F
+            rn = (opcode >> 5) & 0x1F
+            block.emit(IRInstr(IROp.LOAD, dst=rt, src1=rn))
+            return block
+
+        # STR Xt, [Xn]
+        if (opcode >> 22) & 0x3FF == 0b11111000000:
+            rt = opcode & 0x1F
+            rn = (opcode >> 5) & 0x1F
+            block.emit(IRInstr(IROp.STORE, dst=rn, src1=rt))
+            return block
+
+        # B
         if (opcode >> 26) & 0x3F == 0b000101:
             imm26 = opcode & 0x03FFFFFF
             if imm26 & (1 << 25):
-                imm26 |= ~0x03FFFFFF  # sign extend
-            offset = imm26 << 2
-            target = self.s.pc + offset
-
-            block.emit(IRInstr(
-                op=IROp.JMP,
-                imm=target
-            ))
+                imm26 |= ~0x03FFFFFF
+            block.emit(IRInstr(IROp.JMP, imm=self.s.pc + (imm26 << 2)))
             return block
 
-        # ----------------------------------
-        # RET (return from subroutine)
-        # ----------------------------------
+        # RET
         if opcode == 0xD65F03C0:
-            block.emit(IRInstr(
-                op=IROp.JMP,
-                imm=self.s.regs[30]  # X30 = LR
-            ))
+            block.emit(IRInstr(IROp.JMP, imm=self.s.read_reg(30)))
             return block
 
-        # ----------------------------------
-        # Unknown instruction → NOP
-        # ----------------------------------
-        block.emit(IRInstr(op=IROp.NOP))
+        block.emit(IRInstr(IROp.NOP))
         return block
