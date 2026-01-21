@@ -1,72 +1,38 @@
-from dataclasses import dataclass, field
-from enum import Enum
-
-
-class NS2Mode(Enum):
-    HANDHELD = "handheld"
-    DOCKED = "docked"
+from dataclasses import dataclass
 
 
 @dataclass
-class NS2CPUProfile:
-    arch: str = "ARMv8-A"
-    cores: int = 8
-    registers: int = 32
-
-    handheld_freq_mhz: int = 1000
-    docked_freq_mhz: int = 1800
+class VSyncFence:
+    signaled: bool = False
 
 
-@dataclass
-class NS2GPUProfile:
-    unified_memory: bool = True
+class NS2Display:
+    """
+    NS2-style display + vsync model.
+    Fixed refresh, present fences, frame pacing.
+    """
 
-    handheld_in_flight: int = 32
-    docked_in_flight: int = 64
+    def __init__(self, refresh_hz: int = 60):
+        self.refresh_hz = refresh_hz
+        self.cycles_per_frame = int(1_000_000 / refresh_hz)
+        self._cycle_counter = 0
+        self._pending_fence: VSyncFence | None = None
 
-    tile_based: bool = True
+    def present(self) -> VSyncFence:
+        """
+        Submit a frame for presentation.
+        CPU/GPU must wait for vsync fence.
+        """
+        fence = VSyncFence()
+        self._pending_fence = fence
+        self._cycle_counter = 0
+        return fence
 
+    def tick(self, cycles: int):
+        if not self._pending_fence:
+            return
 
-@dataclass
-class NS2MemoryProfile:
-    total_mb: int = 12 * 1024
-    cpu_gpu_shared: bool = True
-    page_size: int = 4096
-    bandwidth_gbps: int = 100
-
-
-@dataclass
-class NS2Profile:
-    cpu: NS2CPUProfile = field(default_factory=NS2CPUProfile)
-    gpu: NS2GPUProfile = field(default_factory=NS2GPUProfile)
-    memory: NS2MemoryProfile = field(default_factory=NS2MemoryProfile)
-
-    mode: NS2Mode = NS2Mode.HANDHELD
-
-    def cpu_freq(self) -> int:
-        return (
-            self.cpu.docked_freq_mhz
-            if self.mode == NS2Mode.DOCKED
-            else self.cpu.handheld_freq_mhz
-        )
-
-    def gpu_in_flight(self) -> int:
-        return (
-            self.gpu.docked_in_flight
-            if self.mode == NS2Mode.DOCKED
-            else self.gpu.handheld_in_flight
-        )
-
-    def refresh_hz(self) -> int:
-        # Conservative default: both modes target 60Hz
-        return 60
-
-    def describe(self) -> str:
-        return (
-            f"NS2Profile("
-            f"mode={self.mode.value}, "
-            f"CPU={self.cpu.cores}x{self.cpu.arch}@{self.cpu_freq()}MHz, "
-            f"GPU_in_flight={self.gpu_in_flight()}, "
-            f"RAM={self.memory.total_mb}MB"
-            f")"
-        )
+        self._cycle_counter += cycles
+        if self._cycle_counter >= self.cycles_per_frame:
+            self._pending_fence.signaled = True
+            self._pending_fence = None

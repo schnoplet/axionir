@@ -19,11 +19,30 @@ class CPUState:
 
 class ShadowMMU:
     """
-    Memory with write-diff tracking for rewind / rollback.
+    Unified memory with bandwidth tracking + rollback.
+    This is REQUIRED for real console software.
     """
-    def __init__(self, size: int = 1024 * 1024):
+
+    def __init__(self, size: int, bandwidth_bytes_per_tick: int):
         self.mem = bytearray(size)
-        self.history = []  # list of (addr, old_value)
+        self.bandwidth_limit = bandwidth_bytes_per_tick
+        self.bandwidth_used = 0
+        self.history = []
+
+    # -------------------------
+    # Bandwidth control
+    # -------------------------
+
+    def reset_bandwidth(self):
+        self.bandwidth_used = 0
+
+    def consume_bandwidth(self, bytes_used: int) -> bool:
+        self.bandwidth_used += bytes_used
+        return self.bandwidth_used <= self.bandwidth_limit
+
+    # -------------------------
+    # Epoch control (rollback)
+    # -------------------------
 
     def begin_epoch(self):
         self.history.append([])
@@ -39,14 +58,23 @@ class ShadowMMU:
         if self.history:
             self.history.pop()
 
+    # -------------------------
+    # Memory access
+    # -------------------------
+
     def read64(self, addr: int) -> int:
+        if not self.consume_bandwidth(8):
+            raise RuntimeError("Memory bandwidth exceeded")
         return int.from_bytes(self.mem[addr:addr+8], "little")
 
     def write64(self, addr: int, value: int):
+        if not self.consume_bandwidth(8):
+            raise RuntimeError("Memory bandwidth exceeded")
+
         if self.history:
-            # record original bytes
             for i in range(8):
                 self.history[-1].append((addr + i, self.mem[addr + i]))
+
         self.mem[addr:addr+8] = value.to_bytes(8, "little")
 
 
@@ -64,35 +92,40 @@ class IRInterpreter:
     def exec(self, ins: IRInstr) -> bool:
         r = self.s.regs
 
-        if ins.op == IROp.NOP:
-            return True
+        try:
+            if ins.op == IROp.NOP:
+                return True
 
-        if ins.op == IROp.MOV:
-            r[ins.dst] = ins.imm if ins.imm is not None else r[ins.src1]
-            return True
+            if ins.op == IROp.MOV:
+                r[ins.dst] = ins.imm if ins.imm is not None else r[ins.src1]
+                return True
 
-        elif ins.op == IROp.ADD:
-            r[ins.dst] = r[ins.src1] + r[ins.src2]
-            return True
+            elif ins.op == IROp.ADD:
+                r[ins.dst] = r[ins.src1] + r[ins.src2]
+                return True
 
-        elif ins.op == IROp.SUB:
-            r[ins.dst] = r[ins.src1] - r[ins.src2]
-            return True
+            elif ins.op == IROp.SUB:
+                r[ins.dst] = r[ins.src1] - r[ins.src2]
+                return True
 
-        elif ins.op == IROp.MUL:
-            r[ins.dst] = r[ins.src1] * r[ins.src2]
-            return True
+            elif ins.op == IROp.MUL:
+                r[ins.dst] = r[ins.src1] * r[ins.src2]
+                return True
 
-        elif ins.op == IROp.LOAD:
-            r[ins.dst] = self.m.read64(r[ins.src1])
-            return True
+            elif ins.op == IROp.LOAD:
+                r[ins.dst] = self.m.read64(r[ins.src1])
+                return True
 
-        elif ins.op == IROp.STORE:
-            self.m.write64(r[ins.dst], r[ins.src1])
-            return True
+            elif ins.op == IROp.STORE:
+                self.m.write64(r[ins.dst], r[ins.src1])
+                return True
 
-        elif ins.op == IROp.CMP:
-            self.s.flags["Z"] = (r[ins.src1] == r[ins.src2])
-            return True
+            elif ins.op == IROp.CMP:
+                self.s.flags["Z"] = (r[ins.src1] == r[ins.src2])
+                return True
+
+        except RuntimeError:
+            # bandwidth stall → speculation failure
+            return False
 
         return False

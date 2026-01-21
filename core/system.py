@@ -47,19 +47,25 @@ class Dispatcher:
 
 class AxionIRSystem:
     """
-    3rd-class NS2 emulator:
-    - docked / handheld modes
-    - CPU/GPU/display behavior changes with mode
+    REAL NS2 emulator core.
+    Unified memory, real contention, real stalls.
     """
 
     def __init__(self, profile: NS2Profile | None = None):
         self.profile = profile or NS2Profile()
 
+        # Memory bandwidth: GB/s → bytes per tick (conservative)
+        bandwidth_bytes = int(
+            (self.profile.memory.bandwidth_gbps * 1e9) / 60
+        )
+
         self.cpu_state = CPUState(
             reg_count=self.profile.cpu.registers
         )
+
         self.mmu = ShadowMMU(
-            size=self.profile.memory.total_mb * 1024 * 1024
+            size=self.profile.memory.total_mb * 1024 * 1024,
+            bandwidth_bytes_per_tick=bandwidth_bytes,
         )
 
         self.interp = IRInterpreter(self.cpu_state, self.mmu)
@@ -82,35 +88,16 @@ class AxionIRSystem:
         self.gpu = NS2GPU(
             max_in_flight=self.profile.gpu_in_flight()
         )
+
         self.display = NS2Display(
             refresh_hz=self.profile.refresh_hz()
         )
 
         print("[AxionIR] Booted", self.profile.describe())
 
-    # -----------------------------
-    # Mode control (REAL NS2 behavior)
-    # -----------------------------
-
-    def set_mode(self, mode: NS2Mode):
-        if self.profile.mode == mode:
-            return
-
-        self.profile.mode = mode
-
-        # Update GPU + display characteristics
-        self.gpu = NS2GPU(
-            max_in_flight=self.profile.gpu_in_flight()
-        )
-        self.display = NS2Display(
-            refresh_hz=self.profile.refresh_hz()
-        )
-
-        print("[AxionIR] Switched to", self.profile.mode.value.upper())
-
-    # -----------------------------
-    # GPU / Display interaction
-    # -----------------------------
+    # -------------------------
+    # GPU / Display
+    # -------------------------
 
     def submit_gpu_work(self, name: str, cycles: int) -> GPUFence:
         return self.gpu.submit_graphics(name, cycles)
@@ -120,6 +107,7 @@ class AxionIRSystem:
             self.scheduler.tick_cpu(1)
             self.gpu.tick()
             self.display.tick(1)
+            self.mmu.reset_bandwidth()
 
     def present_frame(self) -> VSyncFence:
         return self.display.present()
@@ -129,19 +117,20 @@ class AxionIRSystem:
             self.scheduler.tick_cpu(1)
             self.gpu.tick()
             self.display.tick(1)
+            self.mmu.reset_bandwidth()
 
-    # -----------------------------
+    # -------------------------
     # CPU execution
-    # -----------------------------
+    # -------------------------
 
     def run_block(self, block):
         self.dispatcher.run(block)
 
-        # CPU time advances differently depending on mode
         cpu_cycles = len(block)
         if self.profile.mode == NS2Mode.HANDHELD:
-            cpu_cycles *= 2  # lower freq → slower progress
+            cpu_cycles *= 2
 
         self.scheduler.tick_cpu(cpu_cycles)
         self.gpu.tick()
         self.display.tick(cpu_cycles)
+        self.mmu.reset_bandwidth()
