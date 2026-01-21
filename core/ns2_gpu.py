@@ -25,11 +25,11 @@ class GPUQueue:
         self.queue.append(cmd)
 
     def tick(self):
-        # Move commands into execution
+        # Dispatch new commands
         while self.queue and len(self.in_flight) < self.max_in_flight:
             self.in_flight.append(self.queue.popleft())
 
-        # Execute commands
+        # Execute in-flight commands
         finished: List[GPUCommand] = []
         for cmd in self.in_flight:
             cmd.cost_cycles -= 1
@@ -44,7 +44,7 @@ class GPUQueue:
 
 class NS2GPU:
     """
-    NS2-shaped GPU model:
+    NS2-shaped GPU:
     - graphics queue
     - async compute queue
     - fence-based synchronization
@@ -67,3 +67,6 @@ class NS2GPU:
     def tick(self):
         self.graphics.tick()
         self.compute.tick()
+
+    def is_fence_signaled(self, fence: GPUFence) -> bool:
+        return fence.signaled

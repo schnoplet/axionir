@@ -3,7 +3,7 @@ from .optimizer import IROptimizer
 from .cache import HotBlockProfiler, TraceCache
 from .scheduler import Scheduler
 from .ns2_profile import NS2Profile
-from .ns2_gpu import NS2GPU
+from .ns2_gpu import NS2GPU, GPUFence
 
 
 class Dispatcher:
@@ -49,8 +49,10 @@ class Dispatcher:
 
 class AxionIRSystem:
     """
-    AxionIR bound to an NS2-shaped system profile.
-    3rd-class NS2 emulator: hardware-shaped, firmware-free.
+    3rd-class NS2 emulator:
+    - NS2-shaped CPU/GPU/memory
+    - async GPU
+    - CPU↔GPU fence synchronization
     """
 
     def __init__(self, profile: NS2Profile | None = None):
@@ -81,16 +83,26 @@ class AxionIRSystem:
 
         self.scheduler = Scheduler()
 
-        # NS2-shaped GPU
+        # NS2 GPU
         self.gpu = NS2GPU(
             max_in_flight=self.profile.gpu.max_in_flight_cmds
         )
 
         print("[AxionIR] Booted", self.profile.describe())
 
+    def submit_gpu_work(self, name: str, cycles: int) -> GPUFence:
+        return self.gpu.submit_graphics(name, cycles)
+
+    def wait_for_fence(self, fence: GPUFence):
+        """
+        CPU stall until GPU fence is signaled.
+        This is real console behavior.
+        """
+        while not self.gpu.is_fence_signaled(fence):
+            self.scheduler.tick_cpu(1)
+            self.gpu.tick()
+
     def run_block(self, block):
         self.dispatcher.run(block)
         self.scheduler.tick_cpu(len(block))
-
-        # Advance GPU asynchronously
         self.gpu.tick()
