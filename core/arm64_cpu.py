@@ -5,7 +5,7 @@ from .ir import IRInstr, IROp, IRBlock
 class ARM64CPU:
     """
     ARM64 instruction fetch + decode + IR translation.
-    Now includes REAL control flow.
+    Includes real control flow.
     """
 
     def __init__(self, cpu_state, mmu):
@@ -64,7 +64,6 @@ class ARM64CPU:
         # ----------------------------------
         # B (unconditional branch)
         # ----------------------------------
-        # opcode[31:26] == 0b000101
         if (opcode >> 26) & 0x3F == 0b000101:
             imm26 = opcode & 0x03FFFFFF
             if imm26 & (1 << 25):
@@ -79,9 +78,8 @@ class ARM64CPU:
             return block
 
         # ----------------------------------
-        # RET
+        # RET (return from subroutine)
         # ----------------------------------
-        # opcode == 11010110010111110000001111100000
         if opcode == 0xD65F03C0:
             block.emit(IRInstr(
                 op=IROp.JMP,
