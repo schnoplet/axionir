@@ -6,25 +6,36 @@ from .gpu_ir import GPUCommandBuffer
 
 
 class Dispatcher:
-    def __init__(self, interp, opt, profiler, trace_cache):
+    def __init__(self, interp, opt, profiler, trace_cache, cpu_state):
         self.interp = interp
         self.opt = opt
         self.profiler = profiler
         self.trace_cache = trace_cache
+        self.cpu_state = cpu_state
 
     def run(self, block):
         key = block.hash()
 
-        # Run existing trace if present
+        # If we have a trace, attempt speculative execution
         if self.trace_cache.has(key):
+            snapshot = self.cpu_state.snapshot()
+            ok = True
+
             for b in self.trace_cache.get(key):
-                self.interp.exec_block(b)
-            return
+                if not self.interp.exec_block(b):
+                    ok = False
+                    break
+
+            if ok:
+                return
+            else:
+                # rollback
+                self.cpu_state.restore(snapshot)
 
         # Normal execution
         self.interp.exec_block(block)
 
-        # Hot block → trace growth
+        # Hot block → optimize + trace
         if self.profiler.record(block):
             optimized = self.opt.optimize(block)
             self.trace_cache.start_or_extend(key, optimized)
@@ -46,6 +57,7 @@ class AxionIRSystem:
             self.optimizer,
             self.profiler,
             self.trace_cache,
+            self.cpu_state,
         )
 
         self.scheduler = Scheduler()
