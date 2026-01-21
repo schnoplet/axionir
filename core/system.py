@@ -2,7 +2,7 @@ from .cpu import CPUState, ShadowMMU, IRInterpreter
 from .optimizer import IROptimizer
 from .cache import HotBlockProfiler, TraceCache
 from .scheduler import Scheduler
-from .ns2_profile import NS2Profile
+from .ns2_profile import NS2Profile, NS2Mode
 from .ns2_gpu import NS2GPU, GPUFence
 from .ns2_display import NS2Display, VSyncFence
 
@@ -19,7 +19,6 @@ class Dispatcher:
     def run(self, block):
         key = block.hash()
 
-        # speculative trace execution
         if self.trace_cache.has(key):
             snap = self.cpu_state.snapshot()
             self.mmu.begin_epoch()
@@ -37,12 +36,10 @@ class Dispatcher:
                 self.cpu_state.restore(snap)
                 self.mmu.rollback_epoch()
 
-        # normal execution
         self.mmu.begin_epoch()
         self.interp.exec_block(block)
         self.mmu.commit_epoch()
 
-        # hot path → trace
         if self.profiler.record(block):
             optimized = self.opt.optimize(block)
             self.trace_cache.start_or_extend(key, optimized)
@@ -51,13 +48,13 @@ class Dispatcher:
 class AxionIRSystem:
     """
     3rd-class NS2 emulator:
-    CPU + GPU + memory + display + vsync.
+    - docked / handheld modes
+    - CPU/GPU/display behavior changes with mode
     """
 
     def __init__(self, profile: NS2Profile | None = None):
         self.profile = profile or NS2Profile()
 
-        # CPU + memory
         self.cpu_state = CPUState(
             reg_count=self.profile.cpu.registers
         )
@@ -82,13 +79,38 @@ class AxionIRSystem:
 
         self.scheduler = Scheduler()
 
-        # NS2 GPU + Display
         self.gpu = NS2GPU(
-            max_in_flight=self.profile.gpu.max_in_flight_cmds
+            max_in_flight=self.profile.gpu_in_flight()
         )
-        self.display = NS2Display(refresh_hz=60)
+        self.display = NS2Display(
+            refresh_hz=self.profile.refresh_hz()
+        )
 
         print("[AxionIR] Booted", self.profile.describe())
+
+    # -----------------------------
+    # Mode control (REAL NS2 behavior)
+    # -----------------------------
+
+    def set_mode(self, mode: NS2Mode):
+        if self.profile.mode == mode:
+            return
+
+        self.profile.mode = mode
+
+        # Update GPU + display characteristics
+        self.gpu = NS2GPU(
+            max_in_flight=self.profile.gpu_in_flight()
+        )
+        self.display = NS2Display(
+            refresh_hz=self.profile.refresh_hz()
+        )
+
+        print("[AxionIR] Switched to", self.profile.mode.value.upper())
+
+    # -----------------------------
+    # GPU / Display interaction
+    # -----------------------------
 
     def submit_gpu_work(self, name: str, cycles: int) -> GPUFence:
         return self.gpu.submit_graphics(name, cycles)
@@ -108,8 +130,18 @@ class AxionIRSystem:
             self.gpu.tick()
             self.display.tick(1)
 
+    # -----------------------------
+    # CPU execution
+    # -----------------------------
+
     def run_block(self, block):
         self.dispatcher.run(block)
-        self.scheduler.tick_cpu(len(block))
+
+        # CPU time advances differently depending on mode
+        cpu_cycles = len(block)
+        if self.profile.mode == NS2Mode.HANDHELD:
+            cpu_cycles *= 2  # lower freq → slower progress
+
+        self.scheduler.tick_cpu(cpu_cycles)
         self.gpu.tick()
-        self.display.tick(len(block))
+        self.display.tick(cpu_cycles)
