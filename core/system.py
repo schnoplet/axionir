@@ -8,6 +8,7 @@ from core.ipc import IPCMessage
 
 from core.services.time_service import TimeService
 from core.services.process_service import ProcessService
+from core.services.fs_service import FileSystemService
 
 
 class AxionIRSystem:
@@ -30,24 +31,23 @@ class AxionIRSystem:
         self.process = Process(entry_point=0)
         self.services = ServiceManager()
 
-        # Register core services
+        # Core services
         self.services.register("time", TimeService())
-        self.services.register(
-            "process",
-            ProcessService(self.process)
-        )
+        self.services.register("process", ProcessService(self.process))
+        self.services.register("fs", FileSystemService())
 
-        # Give process service handles
+        # Service handles
         self.time_handle = self.process.new_handle("time")
         self.proc_handle = self.process.new_handle("process")
+        self.fs_handle = self.process.new_handle("fs")
 
         print("[AxionIR] Booted", self.profile.describe())
-        print("[AxionIR] Services ready")
+        print("[AxionIR] Services ready: time, process, fs")
 
     def handle_ipc(self):
         """
-        Simplified IPC entry point.
-        X0 = handle
+        IPC entry point.
+        X0 = service handle
         X1 = command id
         """
         handle = self.cpu_state.read_reg(0)
@@ -58,11 +58,11 @@ class AxionIRSystem:
             raise RuntimeError("Invalid service handle")
 
         msg = IPCMessage(cmd)
-        resp = self.services.dispatch(service_name, msg)
+        self.services.dispatch(service_name, msg)
 
-        # Return success in X0
+        # success
         self.cpu_state.write_reg(0, 0)
-        return resp
+        return msg
 
     def run(self, max_steps=10_000_000):
         steps = 0
@@ -72,10 +72,7 @@ class AxionIRSystem:
 
             for ins in block.instructions:
                 if ins.op.name == "SVC":
-                    nr = self.cpu_state.read_reg(8)
-
-                    # IPC syscall
-                    if nr == 0x1000:
+                    if self.cpu_state.read_reg(8) == 0x1000:
                         self.handle_ipc()
                         continue
 
