@@ -4,6 +4,7 @@ from .cache import HotBlockProfiler, TraceCache
 from .scheduler import Scheduler
 from .ns2_profile import NS2Profile
 from .ns2_gpu import NS2GPU, GPUFence
+from .ns2_display import NS2Display, VSyncFence
 
 
 class Dispatcher:
@@ -50,9 +51,7 @@ class Dispatcher:
 class AxionIRSystem:
     """
     3rd-class NS2 emulator:
-    - NS2-shaped CPU/GPU/memory
-    - async GPU
-    - CPU↔GPU fence synchronization
+    CPU + GPU + memory + display + vsync.
     """
 
     def __init__(self, profile: NS2Profile | None = None):
@@ -83,10 +82,11 @@ class AxionIRSystem:
 
         self.scheduler = Scheduler()
 
-        # NS2 GPU
+        # NS2 GPU + Display
         self.gpu = NS2GPU(
             max_in_flight=self.profile.gpu.max_in_flight_cmds
         )
+        self.display = NS2Display(refresh_hz=60)
 
         print("[AxionIR] Booted", self.profile.describe())
 
@@ -94,15 +94,22 @@ class AxionIRSystem:
         return self.gpu.submit_graphics(name, cycles)
 
     def wait_for_fence(self, fence: GPUFence):
-        """
-        CPU stall until GPU fence is signaled.
-        This is real console behavior.
-        """
-        while not self.gpu.is_fence_signaled(fence):
+        while not fence.signaled:
             self.scheduler.tick_cpu(1)
             self.gpu.tick()
+            self.display.tick(1)
+
+    def present_frame(self) -> VSyncFence:
+        return self.display.present()
+
+    def wait_for_vsync(self, fence: VSyncFence):
+        while not fence.signaled:
+            self.scheduler.tick_cpu(1)
+            self.gpu.tick()
+            self.display.tick(1)
 
     def run_block(self, block):
         self.dispatcher.run(block)
         self.scheduler.tick_cpu(len(block))
         self.gpu.tick()
+        self.display.tick(len(block))
