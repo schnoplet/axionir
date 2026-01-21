@@ -6,6 +6,7 @@ from .ns2_profile import NS2Profile, NS2Mode
 from .ns2_gpu import NS2GPU, GPUFence
 from .ns2_display import NS2Display, VSyncFence
 from .elf_loader import ELF64Loader
+from .arm64_cpu import ARM64CPU
 
 
 class Dispatcher:
@@ -20,6 +21,7 @@ class Dispatcher:
     def run(self, block):
         key = block.hash()
 
+        # Try speculative trace
         if self.trace_cache.has(key):
             snap = self.cpu_state.snapshot()
             self.mmu.begin_epoch()
@@ -37,10 +39,12 @@ class Dispatcher:
                 self.cpu_state.restore(snap)
                 self.mmu.rollback_epoch()
 
+        # Normal execution
         self.mmu.begin_epoch()
         self.interp.exec_block(block)
         self.mmu.commit_epoch()
 
+        # Hot path → trace
         if self.profiler.record(block):
             optimized = self.opt.optimize(block)
             self.trace_cache.start_or_extend(key, optimized)
@@ -49,15 +53,21 @@ class Dispatcher:
 class AxionIRSystem:
     """
     REAL NS2 emulator core.
-    Capable of loading real ARM64 ELF binaries.
+    This is no longer a simulator.
+    It loads real ELF binaries and executes ARM64 instructions.
     """
 
     def __init__(self, profile: NS2Profile | None = None):
         self.profile = profile or NS2Profile()
 
+        # Convert GB/s → bytes per frame slice (60 Hz)
         bandwidth_bytes = int(
             (self.profile.memory.bandwidth_gbps * 1e9) / 60
         )
+
+        # -------------------------
+        # CPU + Memory
+        # -------------------------
 
         self.cpu_state = CPUState(
             reg_count=self.profile.cpu.registers
@@ -70,6 +80,13 @@ class AxionIRSystem:
 
         self.interp = IRInterpreter(self.cpu_state, self.mmu)
         self.optimizer = IROptimizer()
+
+        # ARM64 frontend
+        self.arm64 = ARM64CPU(self.cpu_state, self.mmu)
+
+        # -------------------------
+        # Execution infrastructure
+        # -------------------------
 
         self.profiler = HotBlockProfiler()
         self.trace_cache = TraceCache()
@@ -85,6 +102,10 @@ class AxionIRSystem:
 
         self.scheduler = Scheduler()
 
+        # -------------------------
+        # GPU + Display
+        # -------------------------
+
         self.gpu = NS2GPU(
             max_in_flight=self.profile.gpu_in_flight()
         )
@@ -93,22 +114,45 @@ class AxionIRSystem:
             refresh_hz=self.profile.refresh_hz()
         )
 
+        # -------------------------
+        # ELF loader
+        # -------------------------
+
         self.elf = ELF64Loader(self.mmu)
 
         print("[AxionIR] Booted", self.profile.describe())
 
-    # -------------------------
-    # ELF loading (REAL SOFTWARE)
-    # -------------------------
+    # =====================================================
+    # ELF LOADING (REAL SOFTWARE)
+    # =====================================================
 
     def load_elf(self, path: str):
         entry = self.elf.load(path)
         self.cpu_state.pc = entry
         print(f"[AxionIR] ELF loaded, entry @ 0x{entry:x}")
 
-    # -------------------------
-    # GPU / Display
-    # -------------------------
+    # =====================================================
+    # ARM64 EXECUTION
+    # =====================================================
+
+    def step_arm64(self):
+        """
+        Fetch, decode, translate, execute ONE ARM64 instruction.
+        """
+        opcode = self.arm64.fetch()
+        block = self.arm64.decode_to_ir(opcode)
+        self.run_block(block)
+
+    def run_arm64(self, max_steps: int = 1_000_000):
+        """
+        Execute ARM64 instructions until stopped or max_steps reached.
+        """
+        for _ in range(max_steps):
+            self.step_arm64()
+
+    # =====================================================
+    # GPU / DISPLAY SYNC
+    # =====================================================
 
     def submit_gpu_work(self, name: str, cycles: int) -> GPUFence:
         return self.gpu.submit_graphics(name, cycles)
@@ -130,9 +174,9 @@ class AxionIRSystem:
             self.display.tick(1)
             self.mmu.reset_bandwidth()
 
-    # -------------------------
-    # CPU execution
-    # -------------------------
+    # =====================================================
+    # IR EXECUTION
+    # =====================================================
 
     def run_block(self, block):
         self.dispatcher.run(block)
