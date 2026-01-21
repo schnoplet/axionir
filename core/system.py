@@ -4,6 +4,7 @@ from core.elf_loader import ELF64Loader
 from core.ns2_profile import NS2Profile
 from core.service_manager import ServiceManager
 from core.process import Process
+from core.process_manager import ProcessManager
 from core.ipc import IPCMessage
 from core.vfs import VirtualFileSystem
 
@@ -30,7 +31,7 @@ class AxionIRSystem:
         self.elf = ELF64Loader(self.mmu)
 
         # Kernel objects
-        self.process = Process(entry_point=0)
+        self.process_manager = ProcessManager()
         self.services = ServiceManager()
 
         # Filesystem
@@ -38,12 +39,35 @@ class AxionIRSystem:
 
         # Core services
         self.services.register("time", TimeService())
-        self.services.register("process", ProcessService(self.process))
         self.services.register("fs", FileSystemService(self.vfs))
 
         print("[AxionIR] Booted", self.profile.describe())
         print("[AxionIR] FS root:", fs_root)
 
+    # -------------------------
+    # Process launch
+    # -------------------------
+    def launch_elf(self, path: str, is_system=False):
+        entry = self.elf.load(path)
+        proc = self.process_manager.launch(entry, is_system=is_system)
+
+        # Bind process to CPU (single-core for now)
+        self.cpu_state.pc = entry
+
+        # Per-process services
+        self.services.register(
+            "process",
+            ProcessService(proc)
+        )
+
+        print(
+            f"[AxionIR] Launched {'system' if is_system else 'user'} process "
+            f"PID={proc.pid} entry=0x{entry:x}"
+        )
+
+    # -------------------------
+    # Service lookup
+    # -------------------------
     def get_service(self):
         service_map = {
             1: "time",
@@ -53,9 +77,11 @@ class AxionIRSystem:
 
         sid = self.cpu_state.read_reg(1)
         name = service_map.get(sid, f"unknown_{sid}")
-        handle = self.process.new_handle(name)
+        proc = self.process_manager.system_process()
 
+        handle = proc.new_handle(name)
         print(f"[AxionIR] Service lookup '{name}' → handle {handle}")
+
         self.cpu_state.write_reg(0, handle)
 
     def handle_ipc(self):
@@ -63,12 +89,17 @@ class AxionIRSystem:
         cmd = self.cpu_state.read_reg(1)
         data = self.cpu_state.read_reg(2)
 
-        service_name = self.process.get_handle(handle)
+        proc = self.process_manager.system_process()
+        service_name = proc.get_handle(handle)
+
         msg = IPCMessage(cmd, data)
         self.services.dispatch(service_name, msg)
 
         self.cpu_state.write_reg(0, 0)
 
+    # -------------------------
+    # Execution loop
+    # -------------------------
     def run(self, max_steps=10_000_000):
         steps = 0
         while self.cpu_state.running and steps < max_steps:
