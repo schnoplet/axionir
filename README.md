@@ -1,100 +1,151 @@
 # AxionIR
 
-**AxionIR** is a next-generation emulator research core built around an **intermediate-representation–first architecture**, designed to explore high-performance, scalable emulation techniques for modern console-class systems.
+AxionIR is an emulator project for the **Nintendo Switch 2**.  
+Its purpose is to run the real Switch 2 operating system, homescreen, and software on a PC using **files dumped by the user from their own console**.
 
-AxionIR is not a consumer emulator. It is a **research framework** focused on CPU translation, GPU command abstraction, scheduling models, and memory systems, with an emphasis on correctness, experimentation, and long-term extensibility.
-
----
-
-## Project Scope
-
-AxionIR is intended as an early-stage research effort. It does **not** target any specific commercial console, firmware, operating system, or proprietary software.
-
-The project exists to:
-- explore emulator architecture and performance
-- experiment with new execution and scheduling models
-- provide a clean, modular foundation for future research
-- remain legally clean and platform-agnostic
-
-Only original code and original test programs are supported.
+AxionIR does not include any Nintendo code, firmware, keys, or assets.  
+It only provides the execution environment.
 
 ---
 
-## Design Philosophy
+## What AxionIR Is (Technical Explanation)
 
-AxionIR is built around a few core principles:
+AxionIR implements the core components required to host the Nintendo Switch 2 system software:
 
-- **IR-first design**  
-  All CPU execution flows through a custom intermediate representation, enabling optimization, caching, and future JIT compilation.
+- An ARM64 CPU execution pipeline
+- An ELF loader for running real system binaries
+- A kernel-style syscall (SVC) interface
+- A process model with multiple system processes
+- IPC (inter-process communication) and service routing
+- A virtual filesystem backed by user-provided files
+- A boot system that launches system modules in the correct order
+- A framebuffer and display pipeline that system software can draw into
 
-- **Translation over emulation**  
-  Subsystems (especially GPU) are designed to translate intent into modern APIs rather than simulate hardware at a low level.
+Rather than rewriting or replacing the Switch 2 operating system, AxionIR is designed so that **the original system binaries run unmodified**, as they would on real hardware.
 
-- **Deterministic correctness first**  
-  Performance work is layered on top of a deterministic, testable core.
-
-- **Modularity**  
-  CPU, GPU, memory, and scheduling systems are cleanly separated and replaceable.
-
----
-
-## Core Components
-
-- **CPU Core**
-  - Architecture-agnostic intermediate representation
-  - Interpreter and cached block execution
-  - Designed for future dynamic recompilation
-
-- **Memory System**
-  - Flat memory model with hooks for paging and permissions
-  - Save-state and snapshot-friendly design
-
-- **Scheduler**
-  - Experimental CPU/GPU timing and synchronization models
-  - Research-focused decoupling and predictive sync strategies
-
-- **GPU Framework**
-  - Command-buffer-based GPU IR
-  - Backend-agnostic design (e.g. Vulkan, Metal, DirectX)
+The emulator behaves like the underlying console environment:
+- system modules request services
+- services communicate via IPC
+- memory is allocated via kernel calls
+- graphics output goes through the video interface into a framebuffer
 
 ---
 
-## Non-Goals
+## What AxionIR Is (Plain Explanation)
 
-AxionIR explicitly does **not**:
-- ship with firmware, BIOS, or ROMs
-- run proprietary commercial software
-- bypass DRM or security mechanisms
-- replicate any specific console behavior verbatim
+In simple terms:
 
-This project is focused on **emulator technology**, not content execution.
+AxionIR is a program that pretends to be a Nintendo Switch 2 so that the real Switch 2 software thinks it’s running on its own hardware — but it’s actually running on your PC.
 
----
+When fully developed, the intended flow is:
+1. You dump system files from your own Switch 2
+2. You open AxionIR
+3. You select the dumped files
+4. AxionIR starts the Switch 2 operating system
+5. The real homescreen appears in a window
+6. Games and apps can then be launched
 
-## Status
-
-AxionIR is currently in **early development**.
-
-The project is expected to evolve rapidly as new research directions are explored and evaluated.
-
-Breaking changes are normal at this stage.
+AxionIR itself does **not** contain any games or system software.
 
 ---
 
-## License
+## About Dumping System Files
 
-AxionIR is licensed under the **Apache License, Version 2.0**.
+At the moment, there is **no publicly documented, stable method** for dumping Nintendo Switch 2 system software in the form required by emulators.
+This means that you cannot currently use this emulator to actually play games or run official Nintendo Switch 2 software. Based on previous consoles, I expect this to change by the end of the year (around the start of November if I had to put a date on it).
 
-This license was chosen to encourage open research, collaboration, and reuse while providing an explicit patent grant.
+This is expected for a new console. Historically, emulator development begins **before** reliable dumping methods are widely available. The emulator is built first, and support for real system files is added later as legal dumping methods become known.
 
-See the `LICENSE` file for full details.
+AxionIR is being developed with this in mind:
+- it does not assume a specific dump method
+- it is designed to handle partial or incomplete dumps
+- it will validate user-provided files when dumping becomes practical
+
+No dumping tools or instructions are provided by this project.
 
 ---
 
-## Disclaimer
+## Current State of the Project
 
-AxionIR is an independent, open-source research project.
+AxionIR is in **early development**, but the core foundations already exist.
 
-It is not affiliated with, endorsed by, or associated with Nintendo or any other console manufacturer.
+Right now, AxionIR can:
+- Execute real ARM64 binaries
+- Load ELF files and jump to their entry points
+- Provide a kernel-style syscall interface
+- Create and manage system processes
+- Route IPC calls to services
+- Read real files from a user-selected directory
+- Present a real framebuffer in a PC window
+- Launch system modules in a defined boot order
 
-All trademarks and brand names are the property of their respective owners.
+At this stage, the emulator focuses on **infrastructure**, not end-user features.
+
+---
+
+## What Is Not Implemented Yet
+
+The following parts are incomplete or missing:
+
+- Full kernel syscall coverage
+- IPC shared memory buffers
+- GPU command processing
+- Input handling
+- Audio output
+- Accurate timing and scheduling
+- Shader translation and graphics acceleration
+- JIT (dynamic recompilation)
+
+These are expected for an emulator at this stage and are built incrementally on top of the existing structure.
+
+---
+
+## Project Roadmap (Estimated)
+
+Dates are intentionally conservative.
+
+### 2026
+- Expand kernel ABI and syscall coverage  
+- Implement IPC shared memory
+- Bring up basic input and timing
+- Improve error handling and logging
+- Begin early GPU command decoding
+- Basic system stability improvements
+- First partial homescreen boot attempts
+- Initial GPU output beyond framebuffer clears
+- Service completeness improvements
+
+### Beyond
+- Interactive homescreen boot
+- Early system UI rendering
+- Continued GPU and IPC improvements
+- Game compatibility work
+- Performance optimization
+- User-friendly UI and setup flow
+- Packaging into a single executable
+
+This timeline may change depending on complexity and available research.
+
+---
+
+## Legal Notice
+
+AxionIR does not ship with:
+- Nintendo firmware
+- System modules
+- Encryption keys
+- Games or assets
+
+To use AxionIR, users must legally obtain and dump files from their own Nintendo Switch 2.
+
+AxionIR is an independent project and is not affiliated with Nintendo.
+
+---
+
+## Summary
+
+AxionIR is a long-term emulator project aimed at running the real Nintendo Switch 2 software on a PC.
+
+It is currently focused on building the correct low-level environment so that, when legal system dumps become available, the actual system software can run without modification.
+
+Progress is measured in infrastructure and correctness rather than visible features.
