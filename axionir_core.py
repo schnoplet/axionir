@@ -1,18 +1,19 @@
-# AxionIR Core - NS2 Emulator Entry
-# Apache-2.0
+# AxionIR - NS2 Emulator Entrypoint
+# This file intentionally stays small.
+# All real behavior lives in core/.
 
 from core.system import AxionIRSystem
 
 
 def main():
-    sys = AxionIRSystem()
+    # Create system with user-provided filesystem root
+    sys = AxionIRSystem(fs_root="ns2_fs")
 
-    # future:
-    # sys.load_elf("something.elf")
-    # sys.run()
+    # When you have a real ELF to test, uncomment:
+    sys.launch_elf("test.elf", is_system=True)
 
-    # for now, just boot cleanly
-    pass
+    # Run the emulator
+    sys.run()
 
 
 if __name__ == "__main__":
